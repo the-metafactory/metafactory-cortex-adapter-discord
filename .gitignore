@@ -1,0 +1,7 @@
+node_modules/
+*.log
+.DS_Store
+
+# cortex#1950 — the surface-sdk .d.ts is machine-synced from a pinned cortex ref
+# (bun run sync:sdk / postinstall), never committed. See scripts/sync-surface-sdk.ts.
+sdk/

@@ -1,0 +1,27 @@
+{
+  "name": "metafactory-cortex-adapter-discord",
+  "version": "0.1.0",
+  "description": "Cortex Discord surface adapter — installable plugin bundle (ADR-0024, cortex#1797 S12)",
+  "module": "src/plugin.ts",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "scripts": {
+    "sync:sdk": "bun scripts/sync-surface-sdk.ts",
+    "postinstall": "bun scripts/sync-surface-sdk.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "discord.js": "^14.25.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "latest",
+    "typescript": "^5"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}

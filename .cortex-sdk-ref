@@ -1,0 +1,12 @@
+# Pinned cortex ref the surface-sdk .d.ts is synced from (cortex#1950).
+# Bump to adopt a new SURFACE_SDK_VERSION; see scripts/sync-surface-sdk.ts.
+#
+# TEMPORARY — pinned to the feat/1797-extract-discord branch HEAD (S12
+# inversion commit) because that slice widened AdapterSystemEventPort with
+# degraded()/untrustedBotDenied() (Discord needs both; slack's port only had
+# recovered()/disconnected()) and this bundle's src/index.ts/src/plugin.ts
+# need those two methods. The orchestrator MUST repin this to the post-merge
+# squash SHA on cortex main once cortex#1797 (S12) lands — same GC-doom
+# avoidance the slack/mattermost bundles' history already documents (do not
+# leave a branch SHA pinned after merge; branch tips get GC'd).
+bfb9466c885c2bda24872a5c7f2757013ba3d609
