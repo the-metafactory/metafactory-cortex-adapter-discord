@@ -16,6 +16,15 @@
  * `./token-groups.ts`'s doc).
  */
 
+// MUST be first: forces @discordjs/ws onto the `ws` package on Bun (overrides
+// globalThis.WebSocket) BEFORE the `./index` subtree evaluates any transitive
+// `discord.js` / `@discordjs/ws` module-level WebSocket constructor. Fixes the
+// recurring gateway flapping (cortex#546/#581/#590/#591/#593). This runs at
+// plugin-module load — i.e. at the loader's `import()`, before `createAdapter`
+// ever constructs a `DiscordAdapter`/`Client` — preserving the ordering the
+// pre-extraction `cortex.ts` line-1 import guaranteed. See ./ws-transport.ts.
+import "./ws-transport";
+
 import { DiscordAdapter } from "./index";
 import { DiscordPresenceSchema, DiscordBindingSchema, type DiscordPresence } from "./schema";
 import { groupDiscordBindingsByToken } from "./token-groups";
