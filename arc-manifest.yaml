@@ -1,0 +1,53 @@
+# arc-manifest.yaml — install manifest for the cortex Discord surface adapter.
+#
+# This bundle is a cortex PLUGIN, not a skill/CLI/agent: cortex's own plugin
+# loader (src/adapters/loader.ts) discovers it via `arc list --json`, reads the
+# sibling `cortex-plugin.yaml`, and `import()`s `src/plugin.ts` in-process. arc's
+# job here is only to CLONE the repo, run `bun install` (package.json present →
+# discord.js / @discordjs/ws / ws / zod land in node_modules), and RECORD the
+# install so `arc list --json` reports it with its `repoUrl` + `installPath`.
+#
+# Hence `type: component`: component installs drop NO host symlinks
+# ("provides.files only", src/lib/artifact-installer.ts) — exactly right for a
+# bundle whose loading is owned by cortex, not by arc's symlink layer. cortex's
+# OWN arc-manifest is `type: component` for the same reason. `bun install` runs
+# unconditionally in the install transaction (arc#284), independent of type.
+#
+# First-party load exemption is NOT granted by anything in this file: cortex
+# derives the exemption from ITS OWN arc-manifest `dependencies:` entry
+# `metafactory-cortex-adapter-discord` → the repo URL
+# https://github.com/the-metafactory/metafactory-cortex-adapter-discord, then
+# matches the installed bundle's arc-recorded `repoUrl` against it
+# (readCortexDeclaredAdapterRepos + ADAPTER_BUNDLE_DEP_NAME_RE, ADR-0024 §OQ9).
+# tier/name/kind here are self-declared and deliberately NOT part of that trust
+# decision.
+schema: arc/v1
+name: metafactory-cortex-adapter-discord
+namespace: metafactory
+version: 0.1.0
+type: component
+tier: custom
+
+authors:
+  - name: Andreas
+    github: aastroem
+
+license: AGPL-3.0-only
+
+# No `provides:` — a component drops no symlinks. The bundle is loaded by
+# cortex's plugin loader (via cortex-plugin.yaml), never symlinked onto a host.
+
+# Advisory compat metadata only (design-pluggable-adapters.md §3.2). The
+# authoritative load gate is the SDK semver range in cortex-plugin.yaml
+# (`sdkRange: "^1"`), checked by the loader at boot (§4). The `cortex: >=6.7.0`
+# range below mirrors cortex-plugin.yaml's advisory `cortex` field.
+depends_on:
+  tools:
+    - name: bun
+  skills:
+    - name: cortex
+      version: ">=6.7.0"
+      reason: >-
+        Requires a cortex whose SURFACE_SDK_VERSION satisfies the bundle's
+        cortex-plugin.yaml sdkRange (^1); the AdapterSystemEventPort widen
+        (degraded() + untrustedBotDenied()) landed in cortex >=6.7.0.
