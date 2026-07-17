@@ -6,4 +6,17 @@
 # untrustedBotDenied(), which this bundle's src/index.ts/src/plugin.ts need).
 # Repinned off the pre-merge branch SHA 1bf2451e (#1956-class GC-doom
 # avoidance) once S12 landed on main.
-bd52c3bf
+#
+# Repinned again to cortex main HEAD to pick up createPrivateThread
+# (cortex#2206/PR #2214) in the generated surface-sdk.d.ts artifact.
+# The previous pin (bb8d2d2a, the #2214 merge commit itself) genuinely
+# lacked it -- that PR merged one commit before its own CI-fix commit
+# reached the branch (see cortex#2232 for the root cause), so the merge
+# commit itself carries a stale generated artifact. A later, unrelated
+# main commit regenerated it correctly; this pin picks that up. Verified
+# by re-syncing at this ref and diffing: createPrivateThread/
+# CreatePrivateThreadResult are present, matching src/index.ts's
+# implementation exactly -- the local structural-mirror type this file
+# briefly carried is no longer needed and has been removed in favor of
+# importing the real one.
+263749283d4e27e2a23d4940188b79853b8413d3

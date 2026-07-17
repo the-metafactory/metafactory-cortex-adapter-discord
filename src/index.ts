@@ -17,6 +17,7 @@ import type {
   RenderTarget,
   AdapterPolicyPort,
   AdapterSystemEventPort,
+  CreatePrivateThreadResult,
 } from "@the-metafactory/cortex/surface-sdk";
 import type { DiscordPresence } from "./schema";
 import { createDiscordClient, isMentionForBot, extractContent, type ConnectionHealth } from "./client";
@@ -942,6 +943,110 @@ export class DiscordAdapter implements PlatformAdapter {
       console.warn(`discord-${this.instanceId}: thread creation failed, falling back to channel:`, err instanceof Error ? err.message : err);
       return { instanceId: this.instanceId, channelId: msg.channelId, _native: nativeMsg.channel };
     }
+  }
+
+  /**
+   * cortex#2206 — create a PRIVATE thread on `channelId` (a channel the
+   * CALLER already resolved and validated — see `CreatePrivateThreadResult`'s
+   * doc comment in `@the-metafactory/cortex/surface-sdk`) and add
+   * `memberIds` to it. Distinct from
+   * {@link createThread}: that method is MESSAGE-anchored (`msg.startThread`)
+   * and always public; this one is CHANNEL-anchored
+   * (`channel.threads.create({ type: ChannelType.PrivateThread })`, no
+   * inbound message required) and private — only the bot and the
+   * explicitly-added `memberIds` can see it. A private thread with no
+   * members added is invisible to everyone except the bot, so member-adding
+   * is not optional cleanup here, it's the point of the method.
+   *
+   * NEVER throws: every failure mode (bad/missing channel, thread-create
+   * failure) resolves `{ ok: false, detail }` rather than propagating, per
+   * cortex's real interface doc comment (`daemon-brain-host.ts`'s
+   * `create_private_thread` effect handler maps `ok: false` to a retryable
+   * `effect_rejected`/`not_now` rather than an unhandled rejection).
+   *
+   * Partial member-add failure (thread created, one or more `memberIds`
+   * failed to add): `CreatePrivateThreadResult` has exactly two variants —
+   * full success (`{ ok: true, threadId }`) or full failure (`{ ok: false,
+   * detail }`) — there is no third, partial-success variant to report
+   * through. Deliberate choice given that: report `{ ok: true, threadId }`
+   * whenever the thread ITSELF was created (the primary deliverable, and
+   * the thing `daemon-brain-host.ts` actually keys its effect-completion
+   * on), and log each failed member-add via `console.warn` — this file's
+   * established convention for degraded-but-not-fatal conditions (see
+   * `findOrCreateThreadByName`'s `fetchActive`-failure branch below).
+   * Rationale: discarding a successfully-created thread over a partial
+   * membership failure would orphan it (Discord has no "undo thread
+   * create"), whereas a caller can retry a failed `members.add` cheaply —
+   * it's idempotent, adding an already-added member no-ops.
+   */
+  async createPrivateThread(opts: {
+    channelId: string;
+    name: string;
+    memberIds: string[];
+  }): Promise<CreatePrivateThreadResult> {
+    if (!this.client) {
+      return { ok: false, detail: "adapter not started (no client)" };
+    }
+
+    let parent: TextChannel;
+    try {
+      const fetched = await this.client.channels.fetch(opts.channelId);
+      if (fetched?.type !== ChannelType.GuildText) {
+        // Private threads require a guild text channel parent — forum,
+        // voice, announcement channels etc. have different (or no) thread
+        // support. Mirrors findOrCreateThreadByName's same check below.
+        return {
+          ok: false,
+          detail: `channel ${opts.channelId} is not a guild text channel (private threads require one)`,
+        };
+      }
+      parent = fetched;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(`discord-${this.instanceId}: createPrivateThread: cannot fetch channel ${opts.channelId}:`, detail);
+      return { ok: false, detail: `failed to fetch channel: ${detail}` };
+    }
+
+    let thread: ThreadChannel;
+    try {
+      thread = await parent.threads.create({
+        name: opts.name,
+        type: ChannelType.PrivateThread,
+        autoArchiveDuration: 1440,
+        // invitable: false -- Discord's REST default is true, which would let
+        // any explicitly-added member invite arbitrary others into the
+        // thread, silently widening it past the exact memberIds set this
+        // method's contract promises. Not optional for a "private" thread.
+        invitable: false,
+        reason: "cortex#2206 create_private_thread effect",
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(`discord-${this.instanceId}: createPrivateThread: create failed on ${opts.channelId}:`, detail);
+      return { ok: false, detail: `failed to create thread: ${detail}` };
+    }
+
+    // Member-adding — see this method's doc comment for why a per-member
+    // failure doesn't flip the overall result to `ok: false`.
+    const failedMembers: string[] = [];
+    for (const memberId of opts.memberIds) {
+      try {
+        await thread.members.add(memberId);
+      } catch (err) {
+        failedMembers.push(memberId);
+        console.warn(
+          `discord-${this.instanceId}: createPrivateThread: failed to add member ${memberId} to thread ${thread.id}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    if (failedMembers.length > 0) {
+      console.warn(
+        `discord-${this.instanceId}: createPrivateThread: thread ${thread.id} created but ${failedMembers.length}/${opts.memberIds.length} member add(s) failed: ${failedMembers.join(", ")}`,
+      );
+    }
+
+    return { ok: true, threadId: thread.id };
   }
 
   /**
