@@ -1013,6 +1013,11 @@ export class DiscordAdapter implements PlatformAdapter {
         name: opts.name,
         type: ChannelType.PrivateThread,
         autoArchiveDuration: 1440,
+        // invitable: false -- Discord's REST default is true, which would let
+        // any explicitly-added member invite arbitrary others into the
+        // thread, silently widening it past the exact memberIds set this
+        // method's contract promises. Not optional for a "private" thread.
+        invitable: false,
         reason: "cortex#2206 create_private_thread effect",
       });
     } catch (err) {

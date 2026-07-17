@@ -223,6 +223,29 @@ describe("createPrivateThread", () => {
     expect(channel.lastCreatedThread!.addCalls).toEqual(["fake-member-good", "fake-member-bad"]);
   });
 
+  test("ALL member-adds fail: still ok:true with a real threadId, even though nobody meant to see it can — the sharpest edge of the no-partial-success design", async () => {
+    const { adapter, client } = makeAdapter();
+    const channel = new FakeTextChannel(CHANNEL_ID);
+    channel.failingMemberIds.add("fake-member-a");
+    channel.failingMemberIds.add("fake-member-b");
+    client.addChannel(channel);
+
+    const result = await adapter.createPrivateThread({
+      channelId: CHANNEL_ID,
+      name: "escort-session-fake-all-fail",
+      memberIds: ["fake-member-a", "fake-member-b"],
+    });
+
+    // Documented, deliberate behavior: the thread existing is the only thing
+    // ok:true reports on. This is the case where that tradeoff costs the
+    // most -- a thread was created that, from the caller's perspective,
+    // "succeeded," but is currently visible to no one it was meant for.
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok:true");
+    expect(result.threadId).toBe(channel.lastCreatedThread!.id);
+    expect(channel.lastCreatedThread!.addCalls).toEqual(["fake-member-a", "fake-member-b"]);
+  });
+
   test("member-add failure is logged via console.warn (degraded-condition convention)", async () => {
     const { adapter, client } = makeAdapter();
     const channel = new FakeTextChannel(CHANNEL_ID);
