@@ -17,6 +17,7 @@ import type {
   RenderTarget,
   AdapterPolicyPort,
   AdapterSystemEventPort,
+  CreatePrivateThreadResult,
 } from "@the-metafactory/cortex/surface-sdk";
 import type { DiscordPresence } from "./schema";
 import { createDiscordClient, isMentionForBot, extractContent, type ConnectionHealth } from "./client";
@@ -94,41 +95,6 @@ export interface AdapterPayloadFilter {
   envelope?: AdapterPayloadFilterPattern;
   payload?: AdapterPayloadFilterPattern;
 }
-
-// =============================================================================
-// createPrivateThread result — structural mirror (cortex#2206, this repo's #4)
-// =============================================================================
-
-/**
- * cortex#2206 — structural mirror of cortex's `CreatePrivateThreadResult`
- * (`src/adapters/types.ts`, `PlatformAdapter.createPrivateThread`'s return
- * type). Defined locally rather than imported for a reason narrower than
- * the other structural mirrors above: as of this writing cortex's OWN
- * generated `src/surface-sdk/generated/surface-sdk.d.ts` artifact — the
- * flat `.d.ts` `sync-surface-sdk.ts` fetches at the pinned `.cortex-sdk-ref`
- * and the only thing this bundle's `tsc` resolves
- * `@the-metafactory/cortex/surface-sdk` against — has NOT been regenerated
- * to include cortex#2206/PR #2214's `PlatformAdapter.createPrivateThread` /
- * `CreatePrivateThreadResult` addition yet, even pinned at cortex main HEAD
- * post-merge (verified: SURFACE_SDK_VERSION is still "1.1.0", not bumped,
- * and the fetched artifact has no `createPrivateThread` at all). That's a
- * gap in cortex#2206 itself (its own regeneration step), out of scope for
- * this repo to fix directly.
- *
- * The shape below is verified against cortex's real source
- * (`the-metafactory/cortex`, `src/adapters/types.ts`, merge commit
- * bb8d2d2a — PR #2214) rather than guessed from this issue's prose. Once
- * cortex regenerates its artifact to include the real
- * `CreatePrivateThreadResult`, `DiscordAdapter.createPrivateThread` below
- * satisfies `PlatformAdapter.createPrivateThread?` structurally with zero
- * changes needed here — TypeScript's structural typing doesn't care that
- * the name/import path differ, only that the shape matches.
- *
- * NEVER a throw: a platform/API failure (or an unsupported surface)
- * resolves `{ ok: false, detail }` rather than throwing, matching cortex's
- * own doc comment on the real type.
- */
-export type CreatePrivateThreadResult = { ok: true; threadId: string } | { ok: false; detail: string };
 
 /**
  * Cortex-deployment-level wiring passed alongside the agent + presence pair.
@@ -982,7 +948,8 @@ export class DiscordAdapter implements PlatformAdapter {
   /**
    * cortex#2206 — create a PRIVATE thread on `channelId` (a channel the
    * CALLER already resolved and validated — see `CreatePrivateThreadResult`'s
-   * doc comment above) and add `memberIds` to it. Distinct from
+   * doc comment in `@the-metafactory/cortex/surface-sdk`) and add
+   * `memberIds` to it. Distinct from
    * {@link createThread}: that method is MESSAGE-anchored (`msg.startThread`)
    * and always public; this one is CHANNEL-anchored
    * (`channel.threads.create({ type: ChannelType.PrivateThread })`, no
