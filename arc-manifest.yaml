@@ -23,16 +23,32 @@
 # decision.
 schema: arc/v1
 name: metafactory-cortex-adapter-discord
-namespace: metafactory
+namespace: "@metafactory"
 version: 0.1.0
 type: component
 tier: custom
+description: cortex Discord surface adapter — installable plugin on the ADR-0024 pluggable-surface spine (epic cortex#1784)
 
-authors:
-  - name: Andreas
-    github: aastroem
+author:
+  name: Andreas Aastroem
+  github: mellanon
 
 license: AGPL-3.0-only
+
+# Component install drops no host symlinks (cortex loads the plugin in-process).
+# The one real host reach is at install time: package.json `postinstall` runs
+# scripts/sync-surface-sdk.ts, which fetches the pinned cortex surface-sdk .d.ts
+# over the network — declared honestly below rather than as a false empty (arc#240).
+capabilities:
+  filesystem:
+    read: []
+    write: []
+  network:
+    - host: raw.githubusercontent.com
+      reason: postinstall SDK-type sync — scripts/sync-surface-sdk.ts fetches the pinned cortex surface-sdk .d.ts
+  bash:
+    allowed: false
+  secrets: []
 
 # No `provides:` — a component drops no symlinks. The bundle is loaded by
 # cortex's plugin loader (via cortex-plugin.yaml), never symlinked onto a host.
