@@ -95,6 +95,41 @@ export interface AdapterPayloadFilter {
   payload?: AdapterPayloadFilterPattern;
 }
 
+// =============================================================================
+// createPrivateThread result — structural mirror (cortex#2206, this repo's #4)
+// =============================================================================
+
+/**
+ * cortex#2206 — structural mirror of cortex's `CreatePrivateThreadResult`
+ * (`src/adapters/types.ts`, `PlatformAdapter.createPrivateThread`'s return
+ * type). Defined locally rather than imported for a reason narrower than
+ * the other structural mirrors above: as of this writing cortex's OWN
+ * generated `src/surface-sdk/generated/surface-sdk.d.ts` artifact — the
+ * flat `.d.ts` `sync-surface-sdk.ts` fetches at the pinned `.cortex-sdk-ref`
+ * and the only thing this bundle's `tsc` resolves
+ * `@the-metafactory/cortex/surface-sdk` against — has NOT been regenerated
+ * to include cortex#2206/PR #2214's `PlatformAdapter.createPrivateThread` /
+ * `CreatePrivateThreadResult` addition yet, even pinned at cortex main HEAD
+ * post-merge (verified: SURFACE_SDK_VERSION is still "1.1.0", not bumped,
+ * and the fetched artifact has no `createPrivateThread` at all). That's a
+ * gap in cortex#2206 itself (its own regeneration step), out of scope for
+ * this repo to fix directly.
+ *
+ * The shape below is verified against cortex's real source
+ * (`the-metafactory/cortex`, `src/adapters/types.ts`, merge commit
+ * bb8d2d2a — PR #2214) rather than guessed from this issue's prose. Once
+ * cortex regenerates its artifact to include the real
+ * `CreatePrivateThreadResult`, `DiscordAdapter.createPrivateThread` below
+ * satisfies `PlatformAdapter.createPrivateThread?` structurally with zero
+ * changes needed here — TypeScript's structural typing doesn't care that
+ * the name/import path differ, only that the shape matches.
+ *
+ * NEVER a throw: a platform/API failure (or an unsupported surface)
+ * resolves `{ ok: false, detail }` rather than throwing, matching cortex's
+ * own doc comment on the real type.
+ */
+export type CreatePrivateThreadResult = { ok: true; threadId: string } | { ok: false; detail: string };
+
 /**
  * Cortex-deployment-level wiring passed alongside the agent + presence pair.
  * Bundles the deployment-scoped concerns the agent/presence model itself
@@ -942,6 +977,104 @@ export class DiscordAdapter implements PlatformAdapter {
       console.warn(`discord-${this.instanceId}: thread creation failed, falling back to channel:`, err instanceof Error ? err.message : err);
       return { instanceId: this.instanceId, channelId: msg.channelId, _native: nativeMsg.channel };
     }
+  }
+
+  /**
+   * cortex#2206 — create a PRIVATE thread on `channelId` (a channel the
+   * CALLER already resolved and validated — see `CreatePrivateThreadResult`'s
+   * doc comment above) and add `memberIds` to it. Distinct from
+   * {@link createThread}: that method is MESSAGE-anchored (`msg.startThread`)
+   * and always public; this one is CHANNEL-anchored
+   * (`channel.threads.create({ type: ChannelType.PrivateThread })`, no
+   * inbound message required) and private — only the bot and the
+   * explicitly-added `memberIds` can see it. A private thread with no
+   * members added is invisible to everyone except the bot, so member-adding
+   * is not optional cleanup here, it's the point of the method.
+   *
+   * NEVER throws: every failure mode (bad/missing channel, thread-create
+   * failure) resolves `{ ok: false, detail }` rather than propagating, per
+   * cortex's real interface doc comment (`daemon-brain-host.ts`'s
+   * `create_private_thread` effect handler maps `ok: false` to a retryable
+   * `effect_rejected`/`not_now` rather than an unhandled rejection).
+   *
+   * Partial member-add failure (thread created, one or more `memberIds`
+   * failed to add): `CreatePrivateThreadResult` has exactly two variants —
+   * full success (`{ ok: true, threadId }`) or full failure (`{ ok: false,
+   * detail }`) — there is no third, partial-success variant to report
+   * through. Deliberate choice given that: report `{ ok: true, threadId }`
+   * whenever the thread ITSELF was created (the primary deliverable, and
+   * the thing `daemon-brain-host.ts` actually keys its effect-completion
+   * on), and log each failed member-add via `console.warn` — this file's
+   * established convention for degraded-but-not-fatal conditions (see
+   * `findOrCreateThreadByName`'s `fetchActive`-failure branch below).
+   * Rationale: discarding a successfully-created thread over a partial
+   * membership failure would orphan it (Discord has no "undo thread
+   * create"), whereas a caller can retry a failed `members.add` cheaply —
+   * it's idempotent, adding an already-added member no-ops.
+   */
+  async createPrivateThread(opts: {
+    channelId: string;
+    name: string;
+    memberIds: string[];
+  }): Promise<CreatePrivateThreadResult> {
+    if (!this.client) {
+      return { ok: false, detail: "adapter not started (no client)" };
+    }
+
+    let parent: TextChannel;
+    try {
+      const fetched = await this.client.channels.fetch(opts.channelId);
+      if (fetched?.type !== ChannelType.GuildText) {
+        // Private threads require a guild text channel parent — forum,
+        // voice, announcement channels etc. have different (or no) thread
+        // support. Mirrors findOrCreateThreadByName's same check below.
+        return {
+          ok: false,
+          detail: `channel ${opts.channelId} is not a guild text channel (private threads require one)`,
+        };
+      }
+      parent = fetched;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(`discord-${this.instanceId}: createPrivateThread: cannot fetch channel ${opts.channelId}:`, detail);
+      return { ok: false, detail: `failed to fetch channel: ${detail}` };
+    }
+
+    let thread: ThreadChannel;
+    try {
+      thread = await parent.threads.create({
+        name: opts.name,
+        type: ChannelType.PrivateThread,
+        autoArchiveDuration: 1440,
+        reason: "cortex#2206 create_private_thread effect",
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(`discord-${this.instanceId}: createPrivateThread: create failed on ${opts.channelId}:`, detail);
+      return { ok: false, detail: `failed to create thread: ${detail}` };
+    }
+
+    // Member-adding — see this method's doc comment for why a per-member
+    // failure doesn't flip the overall result to `ok: false`.
+    const failedMembers: string[] = [];
+    for (const memberId of opts.memberIds) {
+      try {
+        await thread.members.add(memberId);
+      } catch (err) {
+        failedMembers.push(memberId);
+        console.warn(
+          `discord-${this.instanceId}: createPrivateThread: failed to add member ${memberId} to thread ${thread.id}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    if (failedMembers.length > 0) {
+      console.warn(
+        `discord-${this.instanceId}: createPrivateThread: thread ${thread.id} created but ${failedMembers.length}/${opts.memberIds.length} member add(s) failed: ${failedMembers.join(", ")}`,
+      );
+    }
+
+    return { ok: true, threadId: thread.id };
   }
 
   /**
