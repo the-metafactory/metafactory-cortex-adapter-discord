@@ -24,7 +24,7 @@
 schema: arc/v1
 name: metafactory-cortex-adapter-discord
 namespace: "@metafactory"
-version: 0.1.0
+version: 0.2.0
 type: component
 tier: custom
 description: cortex Discord surface adapter — installable plugin on the ADR-0024 pluggable-surface spine (epic cortex#1784)

@@ -1,6 +1,6 @@
 {
   "name": "metafactory-cortex-adapter-discord",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cortex Discord surface adapter — installable plugin bundle (ADR-0024, cortex#1797 S12)",
   "module": "src/plugin.ts",
   "type": "module",
