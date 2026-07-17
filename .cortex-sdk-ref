@@ -6,4 +6,18 @@
 # untrustedBotDenied(), which this bundle's src/index.ts/src/plugin.ts need).
 # Repinned off the pre-merge branch SHA 1bf2451e (#1956-class GC-doom
 # avoidance) once S12 landed on main.
-bd52c3bf
+#
+# Repinned to cortex main HEAD (cortex#4, this repo) to pick up the
+# maxUploadBytes (cortex#2002/1.1.0) and per-principal MCP grants
+# (cortex#2111) additions this bundle had drifted behind. NOTE: this ref is
+# ALSO post-merge of cortex#2206/PR #2214 (`create_private_thread`), but as
+# of this commit cortex's OWN generated src/surface-sdk/generated/surface-sdk.d.ts
+# artifact has not been regenerated to include that change (verified: fetching
+# this exact path at this ref still lacks `createPrivateThread`/
+# `CreatePrivateThreadResult`, and SURFACE_SDK_VERSION is still "1.1.0", not
+# bumped) — an upstream gap in cortex#2206, out of scope for this repo to fix.
+# `createPrivateThread` below is implemented against the real interface
+# verified from cortex's src/adapters/types.ts source directly (git history:
+# PR #2214, merge commit bb8d2d2a), not from this (currently stale) synced
+# artifact — see src/index.ts's createPrivateThread doc comment.
+bb8d2d2a305abb6d2eb1d6d6f8db6196493ee330
