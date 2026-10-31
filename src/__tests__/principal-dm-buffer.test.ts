@@ -122,7 +122,7 @@ const PENDING_PRINCIPAL_MAX = 50;
 describe("notifyPrincipal + buffer write semantics", () => {
   test("buffers when connectionHealth is disconnected at check time", async () => {
     const { adapter, sends } = makeAdapter({ connected: false });
-    await adapter.notifyPrincipal("hello");
+    expect(await adapter.notifyPrincipal("hello")).toEqual({ delivered: false, kind: "transient", code: "buffered" });
     expect(sends).toEqual([]);
     expect(getBuffer(adapter).length).toBe(1);
     expect(getBuffer(adapter)[0]?.text).toBe("hello");
@@ -130,7 +130,7 @@ describe("notifyPrincipal + buffer write semantics", () => {
 
   test("delivers immediately when connected", async () => {
     const { adapter, sends } = makeAdapter({ connected: true });
-    await adapter.notifyPrincipal("hi");
+    expect(await adapter.notifyPrincipal("hi")).toEqual({ delivered: true, messageId: "m1" });
     expect(sends).toEqual(["hi"]);
     expect(getBuffer(adapter).length).toBe(0);
   });
@@ -151,7 +151,12 @@ describe("notifyPrincipal + buffer write semantics", () => {
       },
     });
     const { adapter, sends } = makeAdapter({ connected: true, fetchUser });
-    await adapter.notifyPrincipal("you have a new task");
+    expect(await adapter.notifyPrincipal("you have a new task")).toEqual({
+      delivered: false,
+      kind: "permanent",
+      code: "50007",
+      detail: "Cannot send messages to this user",
+    });
     expect(sends).toEqual([]);
     // Critical: nothing should have been buffered. Buffering this would leak
     // a forever-failing entry that crowds out genuine principal messages.
@@ -167,7 +172,7 @@ describe("notifyPrincipal + buffer write semantics", () => {
       },
     });
     const { adapter } = makeAdapter({ connected: true, fetchUser });
-    await adapter.notifyPrincipal("oops");
+    expect(await adapter.notifyPrincipal("oops")).toEqual({ delivered: false, kind: "permanent", code: "400", detail: "Bad Request" });
     expect(getBuffer(adapter).length).toBe(0);
   });
 
@@ -189,7 +194,12 @@ describe("notifyPrincipal + buffer write semantics", () => {
     };
     const ctx = makeAdapter({ connected: true, fetchUser });
     healthRef = ctx.health;
-    await ctx.adapter.notifyPrincipal("retry me later");
+    expect(await ctx.adapter.notifyPrincipal("retry me later")).toEqual({
+      delivered: false,
+      kind: "transient",
+      code: "buffered",
+      detail: "ECONNRESET",
+    });
     expect(getBuffer(ctx.adapter).length).toBe(1);
     expect(getBuffer(ctx.adapter)[0]?.text).toBe("retry me later");
   });
@@ -202,10 +212,89 @@ describe("notifyPrincipal + buffer write semantics", () => {
       throw err;
     };
     const { adapter } = makeAdapter({ connected: true, fetchUser });
-    await adapter.notifyPrincipal("flaky");
+    expect(await adapter.notifyPrincipal("flaky")).toEqual({ delivered: false, kind: "transient", code: "ETIMEDOUT", detail: "ETIMEDOUT" });
     // Connection is healthy — we log+drop rather than buffer, otherwise a
     // genuinely-flaky-but-online discord would fill the buffer indefinitely.
     expect(getBuffer(adapter).length).toBe(0);
+  });
+});
+
+describe("notifyPrincipal result without buffering and without a target", () => {
+  test("buffer: false while disconnected resolves disconnected and leaves the buffer empty", async () => {
+    const { adapter, sends } = makeAdapter({ connected: false });
+    expect(await adapter.notifyPrincipal("now or never", { buffer: false })).toEqual({
+      delivered: false,
+      kind: "transient",
+      code: "disconnected",
+    });
+    expect(sends).toEqual([]);
+    expect(getBuffer(adapter).length).toBe(0);
+  });
+
+  test("buffer: false does not buffer a transient error after a TOCTOU disconnect", async () => {
+    // eslint-disable-next-line prefer-const
+    let healthRef!: ConnectionHealth;
+    const fetchUser = async (): Promise<FakeUser> => {
+      healthRef.currentlyConnected = false;
+      const err = new Error("ECONNRESET") as Error & { code: string };
+      err.code = "ECONNRESET";
+      throw err;
+    };
+    const ctx = makeAdapter({ connected: true, fetchUser });
+    healthRef = ctx.health;
+    expect(await ctx.adapter.notifyPrincipal("x", { buffer: false })).toEqual({
+      delivered: false,
+      kind: "transient",
+      code: "ECONNRESET",
+      detail: "ECONNRESET",
+    });
+    expect(getBuffer(ctx.adapter).length).toBe(0);
+  });
+
+  test("buffer: false still delivers when connected", async () => {
+    const { adapter, sends } = makeAdapter({ connected: true });
+    expect(await adapter.notifyPrincipal("hi", { buffer: false })).toEqual({ delivered: true, messageId: "m1" });
+    expect(sends).toEqual(["hi"]);
+  });
+
+  test("unknown user (10013) resolves permanent with the Discord code", async () => {
+    const fetchUser = async (): Promise<FakeUser> => {
+      const err = new Error("Unknown User") as Error & { status: number; code: number };
+      err.name = "DiscordAPIError[10013]";
+      err.status = 404;
+      err.code = 10013;
+      throw err;
+    };
+    const { adapter } = makeAdapter({ connected: true, fetchUser });
+    expect(await adapter.notifyPrincipal("x")).toEqual({ delivered: false, kind: "permanent", code: "10013", detail: "Unknown User" });
+    expect(getBuffer(adapter).length).toBe(0);
+  });
+
+  test("a 5xx while connected resolves transient with the status", async () => {
+    const fetchUser = async (): Promise<FakeUser> => ({
+      send: async () => {
+        const err = new Error("Internal Server Error\nstack noise") as Error & { status: number };
+        err.name = "HTTPError";
+        err.status = 502;
+        throw err;
+      },
+    });
+    const { adapter } = makeAdapter({ connected: true, fetchUser });
+    expect(await adapter.notifyPrincipal("x")).toEqual({ delivered: false, kind: "transient", code: "502", detail: "Internal Server Error" });
+    expect(getBuffer(adapter).length).toBe(0);
+  });
+
+  test("no client resolves not-configured", async () => {
+    const { adapter } = makeAdapter({ connected: true });
+    (adapter as unknown as { client: null }).client = null;
+    expect(await adapter.notifyPrincipal("x")).toEqual({ delivered: false, kind: "permanent", code: "not-configured" });
+    expect(getBuffer(adapter).length).toBe(0);
+  });
+
+  test("no principal discord id resolves not-configured", async () => {
+    const { adapter } = makeAdapter({ connected: true });
+    (adapter as unknown as { infra: { principal: { discordId?: string } } }).infra.principal = {};
+    expect(await adapter.notifyPrincipal("x")).toEqual({ delivered: false, kind: "permanent", code: "not-configured" });
   });
 });
 

@@ -18,6 +18,8 @@ import type {
   AdapterPolicyPort,
   AdapterSystemEventPort,
   CreatePrivateThreadResult,
+  NotifyOptions,
+  NotifyResult,
 } from "@the-metafactory/cortex/surface-sdk";
 import type { DiscordPresence } from "./schema";
 import { createDiscordClient, isMentionForBot, extractContent, type ConnectionHealth } from "./client";
@@ -1231,19 +1233,25 @@ export class DiscordAdapter implements PlatformAdapter {
     return match ? match.id : null;
   }
 
-  async notifyPrincipal(text: string): Promise<void> {
+  async notifyPrincipal(text: string, opts?: NotifyOptions): Promise<NotifyResult> {
+    const buffer = opts?.buffer !== false;
     const principalDiscordId = this.infra.principal.discordId;
-    if (!principalDiscordId || !this.client) return;
+    if (!principalDiscordId || !this.client) {
+      return { delivered: false, kind: "permanent", code: "not-configured" };
+    }
 
     if (!this.connectionHealth?.currentlyConnected) {
+      if (!buffer) return { delivered: false, kind: "transient", code: "disconnected" };
       this.bufferPrincipalDM(text);
-      return;
+      return { delivered: false, kind: "transient", code: "buffered" };
     }
 
     try {
       const principalUser = await this.client.users.fetch(principalDiscordId);
-      await principalUser.send(text);
+      const sent = await principalUser.send(text);
+      return { delivered: true, messageId: sent.id };
     } catch (err) {
+      const detail = DiscordAdapter.errorLine(err);
       // TOCTOU: connection may have flipped between the check above and here.
       // Classify the error so we don't buffer permanently-undeliverable DMs:
       //   - Transient (network, 5xx, abort) → buffer if we're now disconnected,
@@ -1256,7 +1264,7 @@ export class DiscordAdapter implements PlatformAdapter {
           `discord-${this.instanceId}: dropping principal DM, permanently undeliverable:`,
           err instanceof Error ? err.message : err,
         );
-        return;
+        return { delivered: false, kind: "permanent", code: DiscordAdapter.errorCode(err), detail };
       }
       // TOCTOU re-check: TS narrowed `currentlyConnected` to true via the
       // earlier-return guard at the top of `notifyPrincipal`, but the
@@ -1264,12 +1272,29 @@ export class DiscordAdapter implements PlatformAdapter {
       // re-read is load-bearing per the comment block above; suppress
       // the rule that flags it as dead.
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-      if (!this.connectionHealth.currentlyConnected && isRetryableError(err)) {
+      if (buffer && !this.connectionHealth.currentlyConnected && isRetryableError(err)) {
         this.bufferPrincipalDM(text);
-      } else {
-        console.warn(`discord-${this.instanceId}: failed to notify principal:`, err instanceof Error ? err.message : err);
+        return { delivered: false, kind: "transient", code: "buffered", detail };
       }
+      console.warn(`discord-${this.instanceId}: failed to notify principal:`, err instanceof Error ? err.message : err);
+      return { delivered: false, kind: "transient", code: DiscordAdapter.errorCode(err), detail };
     }
+  }
+
+  private static errorCode(err: unknown): string {
+    if (!err || typeof err !== "object") return "error";
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === "number" || (typeof code === "string" && code.length > 0)) return String(code);
+    const status = (err as { status?: unknown }).status;
+    if (typeof status === "number") return String(status);
+    const name = (err as { name?: unknown }).name;
+    return typeof name === "string" && name.length > 0 ? name : "error";
+  }
+
+  private static errorLine(err: unknown): string {
+    const message = err instanceof Error ? err.message : String(err);
+    const line = message.split("\n")[0]?.trim() ?? "";
+    return line.length > 200 ? `${line.slice(0, 199)}…` : line;
   }
 
   /**
