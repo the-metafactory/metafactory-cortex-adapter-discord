@@ -1236,9 +1236,8 @@ export class DiscordAdapter implements PlatformAdapter {
   async notifyPrincipal(text: string, opts?: NotifyOptions): Promise<NotifyResult> {
     const buffer = opts?.buffer !== false;
     const principalDiscordId = this.infra.principal.discordId;
-    if (!principalDiscordId || !this.client) {
-      return { delivered: false, kind: "permanent", code: "not-configured" };
-    }
+    if (!principalDiscordId) return { delivered: false, kind: "permanent", code: "not-configured" };
+    if (!this.client) return { delivered: false, kind: "transient", code: "not-started" };
 
     if (!this.connectionHealth?.currentlyConnected) {
       if (!buffer) return { delivered: false, kind: "transient", code: "disconnected" };

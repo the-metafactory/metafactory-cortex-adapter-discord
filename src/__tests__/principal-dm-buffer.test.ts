@@ -284,10 +284,10 @@ describe("notifyPrincipal result without buffering and without a target", () => 
     expect(getBuffer(adapter).length).toBe(0);
   });
 
-  test("no client resolves not-configured", async () => {
+  test("no client (before start or after stop) resolves transient not-started", async () => {
     const { adapter } = makeAdapter({ connected: true });
     (adapter as unknown as { client: null }).client = null;
-    expect(await adapter.notifyPrincipal("x")).toEqual({ delivered: false, kind: "permanent", code: "not-configured" });
+    expect(await adapter.notifyPrincipal("x")).toEqual({ delivered: false, kind: "transient", code: "not-started" });
     expect(getBuffer(adapter).length).toBe(0);
   });
 
