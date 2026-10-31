@@ -19,4 +19,7 @@
 # implementation exactly -- the local structural-mirror type this file
 # briefly carried is no longer needed and has been removed in favor of
 # importing the real one.
-263749283d4e27e2a23d4940188b79853b8413d3
+#
+# Repinned to cortex main for NotifyResult / NotifyOptions (SURFACE_SDK_VERSION
+# 1.2.0, cortex#2582), which notifyPrincipal now returns and honours.
+6e19a112b5c37cc65c036f9b47e8493f358ce1ab
