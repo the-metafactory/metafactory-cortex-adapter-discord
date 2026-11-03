@@ -19,6 +19,8 @@ class FakePrivateThread {
   deleted = false;
   sendError: (Error & { status?: number }) | null = null;
   membersError: Error | null = null;
+  readError: Error | null = null;
+  deleteError: Error | null = null;
   history = [
     { id: "m-2", author: { id: BOT_ID }, content: "second", createdAt: new Date("2026-11-03T10:00:02Z") },
     { id: "m-1", author: { id: "principal" }, content: "first", createdAt: new Date("2026-11-03T10:00:01Z") },
@@ -30,19 +32,33 @@ class FakePrivateThread {
       return new Map(this.memberIds.map((id) => [id, { id }]));
     },
   };
-  messages = { fetch: async (opts: { limit: number }) => new Map(this.history.slice(0, opts.limit).map((m) => [m.id, m])) };
+  messages = {
+    fetch: async (opts: { limit: number }) => {
+      if (this.readError) throw this.readError;
+      return new Map(this.history.slice(0, opts.limit).map((m) => [m.id, m]));
+    },
+  };
   send = async (opts: Sent) => {
     if (this.sendError) throw this.sendError;
     this.sent.push(opts);
     return { id: `sent-${this.sent.length}` };
   };
-  delete = async () => { this.deleted = true; };
+  delete = async () => {
+    if (this.deleteError) throw this.deleteError;
+    this.deleted = true;
+  };
 }
 
 class FakeClient extends EventEmitter {
   user = { id: BOT_ID };
   channelsById = new Map<string, unknown>();
-  channels = { fetch: async (id: string) => this.channelsById.get(id) ?? null };
+  channels = {
+    fetch: async (id: string) => {
+      const found = this.channelsById.get(id);
+      if (!found) throw new Error("Unknown Channel");
+      return found;
+    },
+  };
   isReady() { return true; }
 }
 
@@ -89,7 +105,8 @@ describe("private conversation thread primitives", () => {
     open.type = ChannelType.PublicThread;
     client.channelsById.set("public-1", open);
     expect(await adapter.privateThreadMembers("public-1")).toEqual({ ok: false, detail: "channel public-1 is not a private thread" });
-    expect(await adapter.privateThreadMembers("missing")).toEqual({ ok: false, detail: "channel missing is not a private thread" });
+    expect(await adapter.privateThreadMembers("missing")).toEqual({ ok: false, detail: "failed to fetch thread: Unknown Channel" });
+    expect(await adapter.postToThread({ threadId: "missing", text: "x", nonce: "n" })).toEqual({ ok: false, detail: "failed to fetch thread: Unknown Channel", uncertain: false });
   });
 
   test("a post sends one message with the nonce enforced and no pings, and returns its id", async () => {
@@ -117,6 +134,15 @@ describe("private conversation thread primitives", () => {
       { id: "m-1", authorId: "principal", content: "first", at: "2026-11-03T10:00:01.000Z" },
       { id: "m-2", authorId: BOT_ID, content: "second", at: "2026-11-03T10:00:02.000Z" },
     ] });
+  });
+
+  test("a failed message read or delete is reported, never thrown", async () => {
+    const { adapter, thread } = withThread();
+    thread.readError = new Error("Missing Access");
+    expect(await adapter.recentThreadMessages({ threadId: "thread-1", limit: 5 })).toEqual({ ok: false, detail: "failed to read thread messages: Missing Access" });
+    thread.deleteError = new Error("Missing Permissions");
+    expect(await adapter.deleteThread("thread-1")).toEqual({ ok: false, detail: "failed to delete thread: Missing Permissions" });
+    expect(thread.deleted).toBe(false);
   });
 
   test("only a private thread this bot created can be deleted", async () => {
