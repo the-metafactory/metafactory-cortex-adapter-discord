@@ -18,6 +18,11 @@ import type {
   AdapterPolicyPort,
   AdapterSystemEventPort,
   CreatePrivateThreadResult,
+  ThreadDeleteResult,
+  ThreadMembersResult,
+  ThreadMessage,
+  ThreadPostResult,
+  ThreadReadResult,
   NotifyOptions,
   NotifyResult,
 } from "@the-metafactory/cortex/surface-sdk";
@@ -603,6 +608,7 @@ export class DiscordAdapter implements PlatformAdapter {
           })),
         timestamp: message.createdAt,
         _native: message,
+        messageId: message.id,
       };
 
       // cortex#120 — Auto-thread on inbound review wire format.
@@ -1049,6 +1055,69 @@ export class DiscordAdapter implements PlatformAdapter {
     }
 
     return { ok: true, threadId: thread.id };
+  }
+
+  private async privateThread(threadId: string): Promise<{ thread: ThreadChannel } | { detail: string }> {
+    if (!this.client) return { detail: "adapter not started (no client)" };
+    try {
+      const fetched = await this.client.channels.fetch(threadId);
+      if (fetched?.type !== ChannelType.PrivateThread) return { detail: `channel ${threadId} is not a private thread` };
+      return { thread: fetched };
+    } catch (err) {
+      return { detail: `failed to fetch thread: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+
+  async privateThreadMembers(threadId: string): Promise<ThreadMembersResult> {
+    const found = await this.privateThread(threadId);
+    if ("detail" in found) return { ok: false, detail: found.detail };
+    try {
+      const members = await found.thread.members.fetch({ cache: false });
+      return { ok: true, memberIds: [...members.keys()] };
+    } catch (err) {
+      return { ok: false, detail: `failed to read thread members: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+
+  async postToThread(opts: { threadId: string; text: string; nonce: string }): Promise<ThreadPostResult> {
+    if (opts.text.length === 0 || opts.text.length > 2000) return { ok: false, detail: `message length ${opts.text.length} is outside 1–2000`, uncertain: false };
+    if (opts.nonce.length === 0 || opts.nonce.length > 25) return { ok: false, detail: "nonce must be 1–25 characters", uncertain: false };
+    const found = await this.privateThread(opts.threadId);
+    if ("detail" in found) return { ok: false, detail: found.detail, uncertain: false };
+    try {
+      const sent = await found.thread.send({ content: opts.text, nonce: opts.nonce, enforceNonce: true, allowedMentions: { parse: [] } });
+      return { ok: true, messageId: sent.id };
+    } catch (err) {
+      const status = (err as { status?: unknown }).status;
+      const rejected = typeof status === "number" && status >= 400 && status < 500;
+      return { ok: false, detail: `send failed: ${err instanceof Error ? err.message : String(err)}`, uncertain: !rejected };
+    }
+  }
+
+  async recentThreadMessages(opts: { threadId: string; limit: number }): Promise<ThreadReadResult> {
+    const found = await this.privateThread(opts.threadId);
+    if ("detail" in found) return { ok: false, detail: found.detail };
+    try {
+      const fetched = await found.thread.messages.fetch({ limit: Math.max(1, Math.min(100, Math.floor(opts.limit))), cache: false });
+      const messages: ThreadMessage[] = [...fetched.values()]
+        .map((message) => ({ id: message.id, authorId: message.author.id, content: message.content, at: message.createdAt.toISOString() }))
+        .sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+      return { ok: true, messages };
+    } catch (err) {
+      return { ok: false, detail: `failed to read thread messages: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+
+  async deleteThread(threadId: string): Promise<ThreadDeleteResult> {
+    const found = await this.privateThread(threadId);
+    if ("detail" in found) return { ok: false, detail: found.detail };
+    if (found.thread.ownerId !== this.client?.user?.id) return { ok: false, detail: `thread ${threadId} was not created by this bot` };
+    try {
+      await found.thread.delete("cortex conversation thread removed");
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, detail: `failed to delete thread: ${err instanceof Error ? err.message : String(err)}` };
+    }
   }
 
   /**
